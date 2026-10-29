@@ -1,11 +1,8 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-import '../services/app_settings.dart';
-import '../services/pdf_service.dart';
+import '../services/pdf_core.dart';
+import '../services/platform_io.dart';
 import '../widgets/common.dart';
 
 /// 合并 PDF：多选文件（可排序），合并为单个文件。
@@ -17,22 +14,19 @@ class MergePage extends StatefulWidget {
 }
 
 class _MergePageState extends State<MergePage> {
-  final _files = <File>[];
+  final _files = <PickedDoc>[];
   bool _busy = false;
   String? _message;
   PdfJob<void>? _job;
-  List<File>? _results;
+  List<PdfOutput>? _results;
 
   bool get _canStart => !_busy && _files.length >= 2;
 
   Future<void> _pickFiles() async {
-    final files = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
-    );
+    final files = await pickDocs(extensions: const ['pdf'], multi: true);
     if (files.isEmpty) return;
     setState(() {
-      _files.addAll([for (final f in files) File(f.path!)]);
+      _files.addAll(files);
       _results = null;
       _message = null;
     });
@@ -48,17 +42,23 @@ class _MergePageState extends State<MergePage> {
   }
 
   Future<void> _start() async {
-    final dirPath = _requireOutputDir();
-    if (dirPath == null) return;
+    if (!outputReady) {
+      setState(() => _message = '请先选择输出目录');
+      return;
+    }
     setState(() {
       _busy = true;
       _message = '正在合并 ${_files.length} 个文件…';
       _results = null;
     });
     try {
-      final job = await PdfService.instance.merge(_files, Directory(dirPath));
+      final inputs = [
+        for (final f in _files) await pdfInputOf(f),
+      ];
+      final job = await PdfCore.instance.merge(inputs);
       setState(() => _job = job);
       await job.done;
+      await saveOutputs(job.outputs);
       setState(() {
         _results = job.outputs;
         _message = null;
@@ -77,16 +77,15 @@ class _MergePageState extends State<MergePage> {
     }
   }
 
-  String? _requireOutputDir() {
-    final dir = AppSettings.outputDir.value;
-    if (dir != null) return dir;
-    setState(() => _message = '请先选择输出目录');
-    return null;
-  }
-
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    return PdfDropZone(
+      onDocsDropped: (files) => setState(() {
+        _files.addAll(files);
+        _results = null;
+        _message = null;
+      }),
+      child: ListView(
       padding: const EdgeInsets.all(16),
       children: [
         SectionCard(
@@ -154,7 +153,7 @@ class _MergePageState extends State<MergePage> {
               ],
               if (_results != null) ...[
                 const SizedBox(height: 16),
-                ResultView(files: _results!),
+                ResultView(outputs: _results!),
               ],
               if (!_busy && _message != null && _results == null) ...[
                 const SizedBox(height: 16),
@@ -167,6 +166,7 @@ class _MergePageState extends State<MergePage> {
           ),
         ),
       ],
+      ),
     );
   }
 }
@@ -181,7 +181,7 @@ class _FileRow extends StatelessWidget {
     required this.onRemove,
   });
 
-  final File file;
+  final PickedDoc file;
   final int index;
   final int count;
   final bool enabled;
@@ -190,12 +190,11 @@ class _FileRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = file.uri.pathSegments.last;
     return ListTile(
       dense: true,
       leading: const Icon(Icons.picture_as_pdf_outlined),
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(fileSizeLabel(file)),
+      title: Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(sizeLabel(file.size)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -219,5 +218,3 @@ class _FileRow extends StatelessWidget {
     );
   }
 }
-
-

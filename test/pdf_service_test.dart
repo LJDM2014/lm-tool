@@ -5,18 +5,7 @@ import 'package:lm_tool/services/pdf_service.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 用引擎自建一个 n 页的 PDF，返回字节。
-Future<Uint8List> makePdf(Pdf pdf, int pages) async {
-  final builder = await pdf.build();
-  for (var i = 0; i < pages; i++) {
-    final page = await builder.addA4Page();
-    await page.paragraph('Page ${i + 1}');
-  }
-  final sink = MemorySink();
-  await builder.save(sink);
-  await builder.dispose();
-  return sink.takeBytes();
-}
+import 'pdf_test_utils.dart';
 
 void main() {
   late Directory tempDir;

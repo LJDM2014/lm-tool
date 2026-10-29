@@ -1,11 +1,8 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-import '../services/app_settings.dart';
-import '../services/pdf_service.dart';
+import '../services/pdf_core.dart';
+import '../services/platform_io.dart';
 import '../widgets/common.dart';
 
 /// 拆分 PDF：按每 N 页一份，或提取指定页码范围。
@@ -19,7 +16,8 @@ class SplitPage extends StatefulWidget {
 enum _SplitMode { every, extract }
 
 class _SplitPageState extends State<SplitPage> {
-  File? _file;
+  PickedDoc? _doc;
+  PdfInput? _input;
   int? _pageCount;
   bool _loadingInfo = false;
   bool _busy = false;
@@ -30,34 +28,39 @@ class _SplitPageState extends State<SplitPage> {
   final _rangeCtrl = TextEditingController();
 
   PdfJob<void>? _job;
-  List<File>? _results;
+  List<PdfOutput>? _results;
 
   bool get _canStart =>
       !_busy &&
-      _file != null &&
+      _input != null &&
       _pageCount != null &&
-      AppSettings.outputDir.value != null &&
+      outputReady &&
       (_mode == _SplitMode.every ||
           _parseRanges(_rangeCtrl.text) != null);
 
   Future<void> _pickFile() async {
-    final pf = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
+    final docs = await pickDocs(
+      extensions: const ['pdf'],
     );
-    if (pf == null) return;
-    final file = File(pf.path!);
+    if (docs.isEmpty) return;
+    await _useDoc(docs.first);
+  }
+
+  Future<void> _useDoc(PickedDoc doc) async {
     setState(() {
-      _file = file;
+      _doc = doc;
+      _input = null;
       _pageCount = null;
       _loadingInfo = true;
       _results = null;
       _message = null;
     });
     try {
-      final count = await PdfService.instance.pageCount(file);
+      final input = await pdfInputOf(doc);
+      final count = await PdfCore.instance.pageCount(input);
       if (mounted) {
         setState(() {
+          _input = input;
           _pageCount = count;
           _loadingInfo = false;
         });
@@ -72,31 +75,13 @@ class _SplitPageState extends State<SplitPage> {
     }
   }
 
-  /// 解析 "1-3,5" 形式的页码范围，返回 0 起始页码列表；非法输入返回 null。
-  List<int>? _parseRanges(String input) {
-    final max = _pageCount;
-    if (max == null) return null;
-    final pages = <int>{};
-    for (final part in input.split(RegExp('[,，]'))) {
-      final p = part.trim();
-      if (p.isEmpty) continue;
-      final m = RegExp(r'^(\d+)(?:\s*-\s*(\d+))?$').firstMatch(p);
-      if (m == null) return null;
-      final a = int.parse(m.group(1)!);
-      final b = m.group(2) == null ? a : int.parse(m.group(2)!);
-      if (a < 1 || b < a || b > max) return null;
-      for (var i = a; i <= b; i++) {
-        pages.add(i - 1);
-      }
-    }
-    if (pages.isEmpty) return null;
-    return pages.toList()..sort();
-  }
+  /// 解析页码范围输入；非法返回 null。
+  List<int>? _parseRanges(String input) =>
+      parsePageRanges(input, _pageCount!);
 
   Future<void> _start() async {
-    final dirPath = AppSettings.outputDir.value;
-    if (dirPath == null || _file == null) return;
-    final file = _file!;
+    final input = _input;
+    if (input == null) return;
     setState(() {
       _busy = true;
       _results = null;
@@ -107,22 +92,18 @@ class _SplitPageState extends State<SplitPage> {
     try {
       final PdfJob<void> job;
       if (_mode == _SplitMode.every) {
-        job = await PdfService.instance.splitEvery(
-          file,
-          _every,
-          Directory(dirPath),
-        );
+        job = await PdfCore.instance.splitEvery(input, _every);
       } else {
         final pages = _parseRanges(_rangeCtrl.text)!;
-        job = await PdfService.instance.extractPages(
-          file,
+        job = await PdfCore.instance.extractPages(
+          input,
           pages,
-          Directory(dirPath),
           nameSuffix: 'pages-${_rangeCtrl.text.trim().replaceAll(' ', '')}',
         );
       }
       setState(() => _job = job);
       await job.done;
+      await saveOutputs(job.outputs);
       setState(() {
         _results = job.outputs;
         _message = null;
@@ -150,7 +131,11 @@ class _SplitPageState extends State<SplitPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return ListView(
+    return PdfDropZone(
+      onDocsDropped: (files) {
+        if (files.isNotEmpty && !_busy) _useDoc(files.first);
+      },
+      child: ListView(
       padding: const EdgeInsets.all(16),
       children: [
         SectionCard(
@@ -162,15 +147,15 @@ class _SplitPageState extends State<SplitPage> {
                 children: [
                   Expanded(
                     child: Text(
-                      _file == null
+                      _doc == null
                           ? '尚未选择文件'
-                          : '${_file!.uri.pathSegments.last}'
-                              '${fileSizePart(_file!)}'
+                          : '${_doc!.name}'
+                              '${sizePart(_doc!.size)}'
                               '${_pageCount != null ? ' · $_pageCount 页' : ''}）',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: _file == null ? theme.hintColor : null,
+                        color: _doc == null ? theme.hintColor : null,
                       ),
                     ),
                   ),
@@ -178,7 +163,7 @@ class _SplitPageState extends State<SplitPage> {
                   OutlinedButton.icon(
                     onPressed: _busy ? null : _pickFile,
                     icon: const Icon(Icons.add),
-                    label: Text(_file == null ? '选择文件' : '重新选择'),
+                    label: Text(_doc == null ? '选择文件' : '重新选择'),
                   ),
                 ],
               ),
@@ -280,7 +265,7 @@ class _SplitPageState extends State<SplitPage> {
               ],
               if (_results != null) ...[
                 const SizedBox(height: 16),
-                ResultView(files: _results!),
+                ResultView(outputs: _results!),
               ],
               if (!_busy && _message != null && _results == null) ...[
                 const SizedBox(height: 16),
@@ -293,6 +278,7 @@ class _SplitPageState extends State<SplitPage> {
           ),
         ),
       ],
+      ),
     );
   }
 }

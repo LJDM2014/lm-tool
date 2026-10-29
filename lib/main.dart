@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'pages/compress_page.dart';
+import 'pages/images_to_pdf_page.dart';
 import 'pages/merge_page.dart';
+import 'pages/page_editor_page.dart';
+import 'pages/protect_page.dart';
+import 'pages/pdf_to_images_page.dart';
 import 'pages/split_page.dart';
 
 void main() {
@@ -50,6 +54,26 @@ class _HomePageState extends State<HomePage> {
       icon: Icon(Icons.compress_outlined),
       selectedIcon: Icon(Icons.compress),
       label: Text('压缩 PDF'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.auto_awesome_motion_outlined),
+      selectedIcon: Icon(Icons.auto_awesome_motion),
+      label: Text('图片转 PDF'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.image_outlined),
+      selectedIcon: Icon(Icons.image),
+      label: Text('PDF 转图片'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.lock_outlined),
+      selectedIcon: Icon(Icons.lock),
+      label: Text('加密保护'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.dashboard_customize_outlined),
+      selectedIcon: Icon(Icons.dashboard_customize),
+      label: Text('页面编辑'),
     ),
   ];
 
@@ -100,6 +124,10 @@ class _HomePageState extends State<HomePage> {
                     MergePage(),
                     SplitPage(),
                     CompressPage(),
+                    ImagesToPdfPage(),
+                    PdfToImagesPage(),
+                    ProtectPage(),
+                    PageEditorPage(),
                   ],
                 ),
               ),
